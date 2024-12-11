@@ -6,7 +6,7 @@ from typing import Dict
 
 
 class ChatServer:
-    def __init__(self, host: str = 'localhost', port: int = 5500):
+    def __init__(self, host: str = '192.168.56.1', port: int = 5505):
         self.host = host
         self.port = port
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
