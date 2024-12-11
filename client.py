@@ -3,18 +3,105 @@ from tkinter import ttk, messagebox, scrolledtext
 import socket
 import json
 import threading
-from typing import Optional
+from typing import Optional, Dict
+from datetime import datetime
+
+
+class ChatWindow(tk.Toplevel):
+    def __init__(self, parent, username: str, send_callback):
+        super().__init__(parent)
+        self.username = username
+        self.send_callback = send_callback
+
+        # Set window title and size
+        self.title(f"Chat with {username}")
+        self.geometry("400x500")
+
+        # Store window position
+        self.position_set = False
+
+        # Bind window movement
+        self.bind('<Configure>', self.on_window_move)
+
+        # Chat history
+        self.chat_display = scrolledtext.ScrolledText(self, wrap=tk.WORD, height=20)
+        self.chat_display.pack(fill="both", expand=True, padx=5, pady=5)
+
+        # Configure text tags
+        self.chat_display.tag_configure('sent', foreground='blue')
+        self.chat_display.tag_configure('received', foreground='green')
+        self.chat_display.tag_configure('timestamp', foreground='gray')
+
+        # Message input area
+        input_frame = ttk.Frame(self)
+        input_frame.pack(fill="x", padx=5, pady=5)
+
+        self.message_entry = ttk.Entry(input_frame)
+        self.message_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
+
+        send_btn = ttk.Button(input_frame, text="Send", command=self.send_message)
+        send_btn.pack(side="right")
+
+        # Bind enter key
+        self.message_entry.bind("<Return>", lambda e: self.send_message())
+
+        # Handle window close
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+    def send_message(self):
+        message = self.message_entry.get().strip()
+        if message:
+            self.send_callback(self.username, message)
+            self.message_entry.delete(0, tk.END)
+
+    def add_message(self, message: str, is_sent: bool = True):
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        tag = 'sent' if is_sent else 'received'
+
+        self.chat_display.insert(tk.END, f"\n[{timestamp}]\n", 'timestamp')
+        self.chat_display.insert(tk.END, f"{'You' if is_sent else self.username}: ", tag)
+        self.chat_display.insert(tk.END, f"{message}\n", tag)
+        self.chat_display.see(tk.END)
+
+        # Make sure window maintains its position when receiving messages
+        if not self.position_set:
+            # Center window on first message
+            self.center_window()
+            self.position_set = True
+
+    def center_window(self):
+        # Get parent window position and size
+        parent_x = self.master.winfo_x()
+        parent_y = self.master.winfo_y()
+        parent_width = self.master.winfo_width()
+
+        # Calculate center position
+        x = parent_x + parent_width + 10  # Position to the right of main window
+        y = parent_y
+
+        # Set window position
+        self.geometry(f"+{x}+{y}")
+
+    def on_window_move(self, event):
+        if event.widget == self:
+            self.position_set = True  # User has manually positioned the window
+
+    def on_closing(self):
+        self.withdraw()  # Hide window instead of destroying
 
 
 class ChatClientGUI:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Multi-Language Chat Client")
-        self.root.geometry("800x600")
+        self.root.geometry("600x600")  # Increased width to 400
 
         # Socket connection
         self.client_socket: Optional[socket.socket] = None
         self.connected = False
+
+        # Store chat windows
+        self.chat_windows: Dict[str, ChatWindow] = {}
 
         # Create and setup GUI elements
         self.setup_gui()
@@ -68,48 +155,52 @@ class ChatClientGUI:
 
         # Connect button
         self.connect_btn = ttk.Button(connection_frame, text="Connect", command=self.connect_to_server)
-        self.connect_btn.grid(row=1, column=4, padx=5)
+        self.connect_btn.grid(row=2, column=0, columnspan=4, pady=10)
 
-        # Main chat area
-        chat_frame = ttk.Frame(self.root)
-        chat_frame.pack(fill="both", expand=True, padx=5, pady=5)
+        # Users List Frame
+        users_frame = ttk.LabelFrame(self.root, text="Active Users")
+        users_frame.pack(fill="both", expand=True, padx=5, pady=5)
 
-        # Users list
-        users_frame = ttk.LabelFrame(chat_frame, text="Active Users", width=200)
-        users_frame.pack(side="left", fill="y", padx=5)
+        self.users_listbox = tk.Listbox(users_frame)
+        self.users_listbox.pack(fill="both", expand=True, padx=5, pady=5)
 
-        self.users_listbox = tk.Listbox(users_frame, width=25)
-        self.users_listbox.pack(fill="both", expand=True)
+        # Bind double-click on user to open chat
+        self.users_listbox.bind('<Double-Button-1>', self.open_chat_window)
 
-        # Chat display and input area
-        chat_display_frame = ttk.Frame(chat_frame)
-        chat_display_frame.pack(side="left", fill="both", expand=True)
+        # Initially disable users list
+        self.users_listbox.configure(state='disabled')
 
-        # Chat history
-        self.chat_display = scrolledtext.ScrolledText(chat_display_frame, wrap=tk.WORD, height=20)
-        self.chat_display.pack(fill="both", expand=True, pady=5)
+    def open_chat_window(self, event=None):
+        selection = self.users_listbox.curselection()
+        if selection:
+            username = self.users_listbox.get(selection[0]).split(" ")[0]
+            self.get_chat_window(username).deiconify()
 
-        # Message input
-        input_frame = ttk.Frame(chat_display_frame)
-        input_frame.pack(fill="x", pady=5)
+    def get_chat_window(self, username: str) -> ChatWindow:
+        if username not in self.chat_windows:
+            self.chat_windows[username] = ChatWindow(
+                self.root,
+                username,
+                self.send_private_message
+            )
+        return self.chat_windows[username]
 
-        self.message_entry = ttk.Entry(input_frame)
-        self.message_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
+    def send_private_message(self, recipient: str, message: str):
+        if not self.connected:
+            return
 
-        self.send_btn = ttk.Button(input_frame, text="Send", command=self.send_message)
-        self.send_btn.pack(side="right")
+        message_data = {
+            "type": "message",
+            "content": message,
+            "recipient": recipient
+        }
 
-        # Bind enter key to send message
-        self.message_entry.bind("<Return>", lambda e: self.send_message())
-
-        # Initially disable chat controls
-        self.toggle_chat_controls(False)
-
-    def toggle_chat_controls(self, enabled: bool):
-        state = 'normal' if enabled else 'disabled'
-        self.message_entry.configure(state=state)
-        self.send_btn.configure(state=state)
-        self.users_listbox.configure(state=state)
+        try:
+            self.client_socket.send(json.dumps(message_data).encode())
+            chat_window = self.get_chat_window(recipient)
+            chat_window.add_message(message, is_sent=True)
+        except:
+            self.disconnect_from_server()
 
     def connect_to_server(self):
         if self.connected:
@@ -132,7 +223,7 @@ class ChatClientGUI:
             self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.client_socket.connect((host, port))
 
-            # Send initial client info with correct language code
+            # Send initial client info
             selected_language = self.language_var.get()
             language_code = self.language_codes[selected_language]
             client_info = {
@@ -148,9 +239,9 @@ class ChatClientGUI:
             receive_thread.start()
 
             # Update GUI
-            self.toggle_chat_controls(True)
+            self.users_listbox.configure(state='normal')
             self.connect_btn.configure(text="Disconnect")
-            self.chat_display.insert(tk.END, "Connected to server\n")
+            messagebox.showinfo("Success", "Connected to server")
 
         except Exception as e:
             messagebox.showerror("Connection Error", str(e))
@@ -159,38 +250,22 @@ class ChatClientGUI:
         if self.client_socket:
             self.client_socket.close()
         self.connected = False
-        self.toggle_chat_controls(False)
+        self.users_listbox.configure(state='disabled')
         self.connect_btn.configure(text="Connect")
         self.users_listbox.delete(0, tk.END)
-        self.chat_display.insert(tk.END, "Disconnected from server\n")
 
-    def send_message(self):
-        if not self.connected:
-            return
+        # Hide all chat windows
+        for window in self.chat_windows.values():
+            window.withdraw()
 
-        message = self.message_entry.get().strip()
-        if not message:
-            return
+        messagebox.showinfo("Disconnected", "Disconnected from server")
 
-        # Check if it's a private message
-        selected_indices = self.users_listbox.curselection()
-        message_data = {
-            "type": "message",
-            "content": message
-        }
-
-        if selected_indices:
-            recipient = self.users_listbox.get(selected_indices[0]).split(" ")[0]  # Get username without language
-            message_data["recipient"] = recipient
-            self.chat_display.insert(tk.END, f"[Private to {recipient}] {message}\n")
-        else:
-            self.chat_display.insert(tk.END, f"[You] {message}\n")
-
-        try:
-            self.client_socket.send(json.dumps(message_data).encode())
-            self.message_entry.delete(0, tk.END)
-        except:
-            self.disconnect_from_server()
+    def update_users_list(self, users):
+        self.users_listbox.delete(0, tk.END)
+        current_username = self.username_entry.get()
+        for user in users:
+            if user['username'] != current_username:
+                self.users_listbox.insert(tk.END, f"{user['username']} ({user['language']})")
 
     def receive_messages(self):
         while self.connected:
@@ -204,26 +279,19 @@ class ChatClientGUI:
                 if message_data["type"] == "active_users":
                     self.update_users_list(message_data["users"])
                 elif message_data["type"] == "message":
-                    prefix = f"[Private from {message_data['from']}]" if message_data.get(
-                        'is_private') else f"[{message_data['username']}]"
-                    self.chat_display.insert(tk.END, f"{prefix} {message_data['content']}\n")
-                    self.chat_display.see(tk.END)
+                    if message_data.get('is_private') and 'from' in message_data:
+                        # Get or create chat window for sender
+                        sender = message_data['from']
+                        chat_window = self.get_chat_window(sender)
+                        chat_window.add_message(message_data['content'], is_sent=False)
+                        chat_window.deiconify()  # Show window when new message arrives
                 elif message_data["type"] == "error":
-                    self.chat_display.insert(tk.END, f"Error: {message_data['content']}\n")
-                    self.chat_display.see(tk.END)
+                    messagebox.showerror("Error", message_data['content'])
 
             except:
                 if self.connected:
                     self.disconnect_from_server()
                 break
-
-    def update_users_list(self, users):
-        self.users_listbox.delete(0, tk.END)
-        current_username = self.username_entry.get()
-        for user in users:
-            # Hanya tampilkan user lain, bukan diri sendiri
-            if user['username'] != current_username:
-                self.users_listbox.insert(tk.END, f"{user['username']} ({user['language']})")
 
     def run(self):
         self.root.mainloop()
